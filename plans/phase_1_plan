@@ -1,0 +1,204 @@
+# BTC/USD Algorithmic Trading Application - Phase 1 Plan
+
+## Overview
+New algorithmic trading application with simulated (mock) execution engine first, then live exchange/WebSocket, databases, and USDT/Lightning integrations behind clean interfaces.
+
+## Technical & Quality Requirements
+- **Language & Runtime**: TypeScript 5.x on Node.js 20 LTS, strict TypeScript enabled, clean modular architecture with explicit interfaces
+- **Containerization**: Multi-stage Dockerfile and docker-compose.yml for reliable build/run in Docker
+- **Unit testing**: Cover all core modules (domain models, balance/fee/slippage accounting, SimulatedBroker, replay engine, strategy logic, metrics calculation)
+- **Integration testing**: Wire real components end-to-end (historical bars → replay feed + strategy + SimulatedBroker → balances, fills, ledger, metrics)
+- **Phase 1 Scope**: Build vertical slice first
+
+## Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         CLI Runner (npm run backtest)               │
+└─────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                      BacktestEngine (orchestrator)                  │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐              │
+│  │ ReplayFeed   │─▶│  Strategy    │─▶│SimulatedBroker│             │
+│  │ (deterministic)          (MA Crossover)   (fees/slippage/ledger)│
+│  └──────────────┘  └──────────────┘  └──────────────┘              │
+└─────────────────────────────────────────────────────────────────────┘
+                                    │
+                    ┌───────────────┼───────────────┐
+                    ▼               ▼               ▼
+            ┌────────────┐  ┌────────────┐  ┌────────────┐
+            │  Metrics   │  │   Trade    │  │  Equity    │
+            │ Calculator │  │    Log     │  │   Curve    │
+            └────────────┘  └────────────┘  └────────────┘
+```
+
+## Directory Structure
+
+```
+/home/tj/projects/algo_trader/
+├── src/
+│   ├── domain/                 # Pure domain models & interfaces
+│   │   ├── types.ts           # Core type definitions (unix ms, decimal precision)
+│   │   ├── models/
+│   │   │   ├── Bar.ts         # OHLCV bar model
+│   │   │   ├── Order.ts       # Order model (limit/market, buy/sell)
+│   │   │   ├── Fill.ts        # Fill/execution model
+│   │   │   ├── Position.ts    # Position tracking
+│   │   │   ├── Balance.ts     # Cash/BTC balance model
+│   │   │   └── Ledger.ts      # Append-only ledger entry
+│   │   └── interfaces/
+│   │       ├── IBroker.ts     # Broker interface (for live later)
+│   │       ├── IDataFeed.ts   # Data feed interface
+│   │       └── IStrategy.ts   # Strategy interface
+│   │
+│   ├── execution/             # Simulated broker implementation
+│   │   ├── SimulatedBroker.ts
+│   │   ├── FeeModel.ts        # Maker/taker fee calculation
+│   │   ├── SlippageModel.ts   # Slippage simulation
+│   │   └── Ledger.ts          # Append-only fill/ledger log
+│   │
+│   ├── data/                  # Historical replay feed
+│   │   ├── ReplayFeed.ts      # Deterministic bar replay (no lookahead)
+│   │   ├── BarLoader.ts       # CSV/JSON bar loading
+│   │   └── SampleData.ts      # Embedded sample data for tests
+│   │
+│   ├── strategy/              # Trading strategies
+│   │   ├── MovingAverageCrossover.ts
+│   │   └── BaseStrategy.ts    # Abstract base class
+│   │
+│   ├── engine/                # Backtest orchestration
+│   │   ├── BacktestEngine.ts
+│   │   └── MetricsCalculator.ts
+│   │
+│   ├── cli/                   # CLI entry point
+│   │   └── runBacktest.ts
+│   │
+│   └── index.ts               # Main exports
+│
+├── tests/
+│   ├── unit/
+│   │   ├── domain/           # Bar, Order, Fill, Position, Balance, Ledger
+│   │   ├── execution/        # FeeModel, SlippageModel, SimulatedBroker
+│   │   ├── data/             # BarLoader, ReplayFeed
+│   │   ├── strategy/         # MovingAverageCrossover
+│   │   └── engine/           # BacktestEngine, MetricsCalculator
+│   ├── integration/
+│   │   └── backtest.integration.test.ts
+│   └── fixtures/
+│       └── sample_bars.csv
+│
+├── docker/
+│   ├── Dockerfile            # Multi-stage: build with tsc, run with node
+│   └── docker-compose.yml    # Service for backtest
+│
+├── package.json
+├── tsconfig.json
+├── jest.config.js
+├── .dockerignore
+└── README.md
+
+## Implementation Order
+
+1. **Project config** → package.json, tsconfig.json, jest.config.js, .dockerignore
+2. **Domain models & interfaces** → types, Bar, Order, Fill, Position, Balance, Ledger, IBroker, IDataFeed, IStrategy
+3. **Execution** → FeeModel, SlippageModel, Ledger, SimulatedBroker
+4. **Data feed** → BarLoader, ReplayFeed, SampleData
+5. **Strategy** → BaseStrategy, MovingAverageCrossover (SMA)
+6. **Engine** → BacktestEngine, MetricsCalculator
+7. **CLI** → runBacktest.ts
+8. **Docker** → Dockerfile, docker-compose.yml
+9. **Tests** → Unit tests for each module + integration test
+
+## Key Design Decisions
+
+| Concern | Decision |
+|---------|----------|
+| **Time handling** | Unix milliseconds (UTC), strictly increasing in replay |
+| **Precision** | `decimal.js` for financial math (no floating-point errors) |
+| **Immutability** | Domain models are readonly; state changes via new instances |
+| **Lookahead prevention** | ReplayFeed only exposes current bar; next() advances time |
+| **Fees/Slippage** | Configurable via FeeModel/SlippageModel injected into SimulatedBroker |
+| **Ledger** | Append-only array; each fill creates ledger entry with timestamp, fees, balances |
+
+## CLI Runner Output
+
+```
+BTC/USD Backtest Report
+=======================
+Historical Data: 1-minute bars, 1000 bars
+Strategy: SMA Crossover (fast=10, slow=30)
+Initial BTC: 1.0, Initial USD: 10000.0
+
+Final Equity: $12,345.67  (+23.46%)
+Total Return: +23.46%
+Total Fees Paid: $45.23
+Max Drawdown: -8.2% (from peak $10,500.00)
+Ending BTC: 1.1234
+Ending USD: 9876.56
+
+Trade Log: 42 trades
+  - Winners: 24 (57.1%)
+  - Losers: 18 (42.9%)
+  - Avg Trade Duration: 14.3 min
+
+Equity Curve Stats:
+  - Final Peak: $11,200.00
+  - Recovery from drawdown: $10,300.00
+```
+
+## Dependencies
+
+```
+"dependencies": {
+    "decimal.js": "^10.4.3",
+    "zod": "^3.22.0"  // optional: runtime validation
+},
+"devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "^20.11.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.2",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.0"
+}
+```
+
+## Docker Build Strategy
+
+Multi-stage Dockerfile:
+1. **Build stage**: `node:20-slim` → install deps → `tsc` compile `src/` → `dist/`
+2. **Run stage**: `node:20-slim` → copy `dist/` from build stage → `CMD ["node", "dist/cli/runBacktest.js"]`
+3. `docker-compose.yml` exposes no ports by default (CLI-only), can add `depends_on` for services later.
+
+## Unit Test Coverage Targets
+
+| Module | Key Behaviors to Test |
+|--------|----------------------|
+| **Bar** | Constructor, toJSON, equality |
+| **Order** | Limit vs market, buy vs sell, validate |
+| **Fill** | Constructor, fee calculation, ledger entry creation |
+| **Position** | Update with fill, P&L calculation, BTC amount |
+| **Balance** | Cash/BTC update, sufficiency check, after-fee deduction |
+| **Ledger** | Append-only, retrieval by timestamp, summary |
+| **FeeModel** | Maker fee %, taker fee %, total fees |
+| **SlippageModel** | Price impact based on order size |
+| **SimulatedBroker** | Buy power check, sell execution, fill log, ledger |
+| **ReplayFeed** | next() advances, no lookahead, bar at time |
+| **MovingAverageCrossover** | Entry signal, exit signal, warmup bar count |
+| **BacktestEngine** | Run loop, bar processing, state progression |
+| **MetricsCalculator** | Final equity, total return, max drawdown, fee summary |
+
+## Integration Test Scope
+
+1. Load sample `sample_bars.csv` (1000 1-min bars)
+2. Initialize `SimulatedBroker` with 1.0 BTC, 10000.0 USD, 0.1% maker/taker fees
+3. Run `ReplayFeed` → `MovingAverageCrossover` (fast=10, slow=30) → `SimulatedBroker`
+4. Assert:
+   - Final BTC balance close to expected (e.g., ~1.05 BTC depending on price move)
+   - Final USD balance close to expected
+   - Trade log has correct number of entries
+   - Ledger entries have fees and balance snapshots
+   - Metrics: total return positive if trend direction correct, max drawdown computed
+   - No lookahead bias (strategy only uses bars up to current time)

@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  backtest:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: algo-trader-backtest
+    volumes:
+      - ../tests/fixtures:/app/tests/fixtures:ro
+    # Run with sample CSV by default; override with custom path if needed
+    command: ["node", "dist/cli/runBacktest.js", "tests/fixtures/sample_bars.csv"]
+    restart: "no"
